@@ -91,6 +91,14 @@ class OverloadCLI extends OverloadApplicationCLI
 	private $articleCreators;
 
 	/**
+	 * User IDs that can create tags
+	 *
+	 * @var   array
+	 * @since 2.0.0
+	 */
+	private $tagCreators;
+
+	/**
 	 * com_content's container
 	 *
 	 * @var   \Joomla\DI\Container
@@ -122,6 +130,10 @@ class OverloadCLI extends OverloadApplicationCLI
 		$articlesDelete    = !$this->input->getBool('articles-nozap', false);
 		$articlesRandomize = $this->input->getBool('articles-randomize', false);
 
+		// Tags
+		$tagLevels         = $this->input->getInt('tag-levels', 3);
+		$tagCount          = $this->input->getInt('tag-count', 10);
+
 		// Initialize CLI routing
 		$this->initCliRouting($siteURL);
 
@@ -133,10 +145,10 @@ class OverloadCLI extends OverloadApplicationCLI
 		$jLang->load('com_content', JPATH_ADMINISTRATOR, null);
 
 		// Tell Joomla where to find models and tables
-		BaseDatabaseModel::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_categories/models');
-		BaseDatabaseModel::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_content/models');
-		Table::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_categories/tables');
-		Table::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_content/tables');
+		BaseDatabaseModel::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_categories/src/Model');
+		BaseDatabaseModel::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_content/src/Model');
+		Table::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_categories/src/Table');
+		Table::addIncludePath(JPATH_ADMINISTRATOR . '/components/com_content/src/Table');
 
 		// Pretend that a Super User is logged in
 		$suIDs     = $this->getSuperUsers();
@@ -158,7 +170,7 @@ class OverloadCLI extends OverloadApplicationCLI
 			// Get the categories root
 			$rootCategory = $this->getCategoriesRoot();
 		}
-		else
+		elseif ($catCount > 0)
 		{
 			// Verify the $rootCategory or fail early
 			$this->verifyCategory($rootCategory);
@@ -190,7 +202,7 @@ class OverloadCLI extends OverloadApplicationCLI
 			$this->out('Creating categories');
 			$catIDs                 = [];
 			$previousLevelIDs       = [$rootCategory];
-			$this->categoryCreators = $this->getGroupCreators();
+			$this->categoryCreators = $this->getCategoryGroupCreators();
 
 			for ($i = 0; $i < $catLevels; $i++)
 			{
@@ -222,6 +234,31 @@ class OverloadCLI extends OverloadApplicationCLI
 
 		$this->out(sprintf('We have a total of %d categories to create articles in.', count($catIDs)));
 
+		// Create the tags
+        if ($tagCount > 0) {
+            $this->out('Creating Tags');
+            $this->out('Deleting existing Tags');
+            $this->clearTags();
+            $previousLevelIDs = [1];
+            $tagIDs = [];
+            $this->tagCreators = $this->getTagGroupCreators();
+
+            for ($i = 0; $i < $tagLevels; $i++) {
+                $this->out(sprintf('  Creating tags %d level(s) from the root', $i + 1));
+                $thisLevelIDs = [];
+                foreach ($previousLevelIDs as $parentId) {
+                    for ($j = 0; $j < $tagCount; $j++) {
+                        $thisLevelIDs[] = $this->createTag();
+                    }
+                }
+                $tagIDs           = array_merge($tagIDs, $thisLevelIDs);
+                $previousLevelIDs = $thisLevelIDs;
+            }
+        }
+
+        $this->out(sprintf('We have a total of %d Tags to create articles in.', count($tagIDs)));
+
+        // Create articles, assign categories and tags to articles
 		foreach ($catIDs as $catId)
 		{
 			// Find out which users can create articles in this category
@@ -248,7 +285,10 @@ class OverloadCLI extends OverloadApplicationCLI
 
 			for ($j = 0; $j < $createArticleCount; $j++)
 			{
-				$this->createArticle($catId);
+				$articleId = $this->createArticle($catId);
+				if($articleId && !empty($tagIDs)) {
+				    $this->assignTag($articleId, array_rand($tagIDs));
+                }
 			}
 		}
 	}
@@ -442,14 +482,156 @@ class OverloadCLI extends OverloadApplicationCLI
 	}
 
 	/**
+	 * Create a category and return its ID or NULL if creation failed
+	 *
+	 * @param   int  $parent_id  Parent category ID
+	 *
+	 * @return  int|null  Created category ID or NULL if creation failed
+	 *
+	 * @throws  Exception
+	 * @since   2.0.0
+	 */
+	private function createTag(int $parent_id = 1): ?int
+	{
+		$title = $this->faker->sentence(8);
+		$alias = ApplicationHelper::stringURLSafe($title);
+		$uid   = $this->faker->randomElement($this->tagCreators);
+
+		if (version_compare(JVERSION, '3.999.999', 'le'))
+		{
+			/** @var CategoriesModelCategory $model */
+			$model  = BaseDatabaseModel::getInstance('Tag', 'TagsModel');
+		}
+		else
+		{
+			/** @var MVCFactoryInterface $factory */
+			$factory = $this->bootComponent('com_tags')->getMVCFactory();
+			/** @var \Joomla\Component\Tags\Administrator\Model\TagModel $model */
+			$model = $factory->createModel('Tag', 'Administrator');
+		}
+
+		$parent = $model->getItem($parent_id);
+
+		$data = [
+			'parent_id'       => $parent_id,
+			'level'           => $parent->level + 1,
+			'title'           => $title,
+			'alias'           => $alias,
+			'description'     => $this->getRandomParagraphs(3, true),
+			'access'          => 1,
+			'params'          => ['tag_layout' => '', 'tag_link_class' => ''],
+			'metadata'        => ['author' => '', 'robots' => ''],
+			'hits'            => 0,
+			'language'        => '*',
+			'associations'    => [],
+			'published'       => 1,
+            'images'          => [
+                'image_intro' => '',
+                'float_intro' => '',
+                'image_intro_alt' => '',
+                'image_intro_caption' => '',
+                'image_fulltext' => '',
+                'float_fulltext' =>'',
+                'image_fulltext_alt'=> '',
+                'image_fulltext_caption' => ''
+                ],
+			'created_user_id' => $uid,
+            'urls'            => [],
+            'version'         => 1
+		];
+
+		// Save the category
+		$result = $model->save($data);
+
+		// If the save succeeded return the numeric category ID
+		if ($result !== false)
+		{
+			return $model->getState($model->getName() . '.id');
+		}
+
+		// Let's try to load a category of the same alias
+		$db    = Factory::getDbo();
+		$query =
+			$db->getQuery(true)
+				->select('id')
+				->from($db->qn('#__tags'))
+				->where($db->qn('alias') . ' = ' . $db->q($alias));
+		$db->setQuery($query);
+		$id = $db->loadResult() ?? 0;
+
+		// Nope. No dice. Return null.
+		if (!$id)
+		{
+			return null;
+		}
+
+		// Enable an existing category
+		$tag = $model->getItem($id);
+
+		if (!$tag->published)
+		{
+            $tag->published = 1;
+		}
+
+        $tag = (array) $tag;
+		$model->save($tag);
+
+		return $id;
+	}
+
+    /**
+     * Assign tag to an article
+     *
+     * @param int $article_id
+     * @param it $tag_id
+     *
+     * @return bool|null
+     * @since 1.0.0
+     */
+	protected function assignTag($article_id, $tag_id)
+    {
+        $typeAlias = 'com_content.article';
+        $contentId = 1;
+        $typeId = 1;
+        $db         = Factory::getDbo();
+        $query      = $db->getQuery(true);
+        $query->insert($db->quoteName('#__contentitem_tag_map'))
+            ->columns(
+                [
+                    $db->quoteName('type_alias'),
+                    $db->quoteName('core_content_id'),
+                    $db->quoteName('content_item_id'),
+                    $db->quoteName('tag_id'),
+                    $db->quoteName('type_id'),
+                ]
+            )
+            ->values(':type_alias, :core_content_id , :content_item_id, :tag_id, :type_id')
+            ->bind(':type_alias', $typeAlias)
+            ->bind(':core_content_id', $contentId)
+            ->bind(':content_item_id', $article_id)
+            ->bind(':tag_id', $tag_id)
+            ->bind(':type_id', $typeId);
+        $db->setQuery($query);
+        try
+        {
+            $db->execute();
+        }
+        catch (\RuntimeException $e)
+        {
+            throw $e;
+        }
+        return true;
+    }
+
+	/**
 	 * Creates an article in the specified category
 	 *
 	 * @param   int  $cat_id  The category to create the article in
 	 *
-	 * @return  void
+	 * @return  null|int
 	 * @since   2.0.0
 	 */
-	private function createArticle($cat_id = 1): void
+	private function createArticle($cat_id = 1)
 	{
 		$title = $this->faker->sentence(8);
 		$alias = ApplicationHelper::stringURLSafe($title);
@@ -523,7 +705,46 @@ class OverloadCLI extends OverloadApplicationCLI
 		{
 			throw new RuntimeException($model->getError());
 		}
+
+        // Let's try to load a category of the same alias
+        $db    = Factory::getDbo();
+        $query =
+            $db->getQuery(true)
+               ->select('id')
+               ->from($db->qn('#__content'))
+               ->where($db->qn('alias') . ' = ' . $db->q($alias));
+        $db->setQuery($query);
+        $id = $db->loadResult() ?? 0;
+
+        // Nope. No dice. Return null.
+        if (!$id)
+        {
+            return null;
+        }
+
+        return $id;
 	}
+
+    /**
+     * Clear existing tags and associations
+     *
+     * @since 1.0.0
+     */
+	protected function clearTags()
+    {
+        $db = Factory::getDbo();
+        $query = $db->getQuery(true);
+        $query->delete($db->quoteName('#__tags'))->where('`id` > 1');
+        $db->setQuery($query);
+        $db->execute();
+
+        // Delete also associations
+        $db = Factory::getDbo();
+        $query = $db->getQuery(true);
+        $query->delete($db->quoteName('#__contentitem_tag_map'))->where('`tag_id` > 1');
+        $db->setQuery($query);
+        $db->execute();
+    }
 
 	/**
 	 * Get a number of random paragraphs of HTML text
@@ -773,7 +994,7 @@ class OverloadCLI extends OverloadApplicationCLI
 	 *
 	 * @since   2.0.0
 	 */
-	private function getGroupCreators(): array
+	private function getCategoryGroupCreators(): array
 	{
 		$authorGroups = array_filter($this->getAllUserGroups(), function ($gid) {
 			return Access::checkGroup($gid, 'core.create') ||
@@ -790,6 +1011,33 @@ class OverloadCLI extends OverloadApplicationCLI
 
 		return $users;
 	}
+
+    /**
+     * Returns the user IDs which can create groups
+     *
+     * @return  array
+     *
+     * @since   2.0.0
+     */
+    private function getTagGroupCreators(): array
+    {
+        $authorGroups = array_filter($this->getAllUserGroups(), function ($gid) {
+            return Access::checkGroup($gid, 'core.create') ||
+                Access::checkGroup($gid, 'core.admin') ||
+                Access::checkGroup($gid, 'core.create', 'com_tags');
+        });
+
+        $users = [];
+
+        foreach ($authorGroups as $gid)
+        {
+            $users = array_merge($users, Access::getUsersByGroup($gid));
+        }
+
+        return $users;
+    }
+
+
 
 	/**
 	 * Returns the user IDs of Super Users
