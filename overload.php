@@ -406,7 +406,7 @@ class OverloadCLI extends OverloadApplicationCLI
 	 */
 	private function createCategory(int $parent_id = 1): ?int
 	{
-		$title = $this->faker->sentence(8);
+		$title = $this->faker->sentence(4);
 		$alias = ApplicationHelper::stringURLSafe($title);
 		$uid   = $this->faker->randomElement($this->categoryCreators);
 
@@ -493,7 +493,7 @@ class OverloadCLI extends OverloadApplicationCLI
 	 */
 	private function createTag(int $parent_id = 1): ?int
 	{
-		$title = $this->faker->sentence(8);
+		$title = $this->faker->sentence(2);
 		$alias = ApplicationHelper::stringURLSafe($title);
 		$uid   = $this->faker->randomElement($this->tagCreators);
 
@@ -512,12 +512,17 @@ class OverloadCLI extends OverloadApplicationCLI
 
 		$parent = $model->getItem($parent_id);
 
+		if(!$parent) {
+		    $this->out("No ROOT exists for the Tags. Aborting..");
+		    return false;
+        }
+
 		$data = [
 			'parent_id'       => $parent_id,
 			'level'           => $parent->level + 1,
 			'title'           => $title,
 			'alias'           => $alias,
-			'description'     => $this->getRandomParagraphs(3, true),
+			'description'     => $this->getRandomParagraphs(1, true),
 			'access'          => 1,
 			'params'          => ['tag_layout' => '', 'tag_link_class' => ''],
 			'metadata'        => ['author' => '', 'robots' => ''],
