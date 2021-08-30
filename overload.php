@@ -334,8 +334,8 @@ class OverloadCLI extends OverloadApplicationCLI
 
                     // Assign field values to the articles
                     if(!empty($fields)) {
-                        // Assign 1-3 fields per article
-                        for ($i = 0; $i < rand(1, 3); $i++) {
+                        // Assign 2-4 fields per article
+                        for ($i = 0; $i < rand(2, 4); $i++) {
                             $field = $fields[array_rand($fields)];
                             $assignResult = $this->assignFieldValue($field, $articleId);
                             if($assignResult) {
