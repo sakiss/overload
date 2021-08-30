@@ -683,7 +683,6 @@ class OverloadCLI extends OverloadApplicationCLI
     {
         $title = $this->faker->sentence(2);
         $name = strtolower($title);
-        $alias = ApplicationHelper::stringURLSafe($title);
         $uid   = $this->faker->randomElement($this->fieldCreators);
 
         if (version_compare(JVERSION, '3.999.999', 'le'))
