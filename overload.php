@@ -134,6 +134,9 @@ class OverloadCLI extends OverloadApplicationCLI
 		$tagLevels         = $this->input->getInt('tag-levels', 3);
 		$tagCount          = $this->input->getInt('tag-count', 10);
 
+        // Custom fields
+        $customFieldCount          = $this->input->getInt('customfields-count', 10);
+
 		// Initialize CLI routing
 		$this->initCliRouting($siteURL);
 
@@ -287,7 +290,17 @@ class OverloadCLI extends OverloadApplicationCLI
 			{
 				$articleId = $this->createArticle($catId);
 				if($articleId && !empty($tagIDs)) {
-				    $this->assignTag($articleId, array_rand($tagIDs));
+				    $tagIdsTmp = [];
+				    // Assign 1-3 tags per article
+				    for($i = 0; $i < rand(1, 3); $i++) {
+                        $tagId = $tagIDs[array_rand($tagIDs)];
+                        // Do not assign the same id, more than once.
+                        if(in_array($tagId, $tagIdsTmp)) {
+                            continue;
+                        }
+                        $tagIdsTmp[] = $tagId;
+                        $this->assignTag($articleId, $tagId);
+                    }
                 }
 			}
 		}
@@ -1042,6 +1055,30 @@ class OverloadCLI extends OverloadApplicationCLI
         return $users;
     }
 
+    /**
+     * Returns the user IDs which can create groups
+     *
+     * @return  array
+     *
+     * @since   2.0.0
+     */
+    private function getFieldGroupCreators(): array
+    {
+        $authorGroups = array_filter($this->getAllUserGroups(), function ($gid) {
+            return Access::checkGroup($gid, 'core.create') ||
+                Access::checkGroup($gid, 'core.admin') ||
+                Access::checkGroup($gid, 'core.create', 'com_fields');
+        });
+
+        $users = [];
+
+        foreach ($authorGroups as $gid)
+        {
+            $users = array_merge($users, Access::getUsersByGroup($gid));
+        }
+
+        return $users;
+    }
 
 
 	/**
