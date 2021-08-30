@@ -248,7 +248,7 @@ class OverloadCLI extends OverloadApplicationCLI
                 $thisLevelIDs = [];
                 foreach ($previousLevelIDs as $parentId) {
                     for ($j = 0; $j < $tagCount; $j++) {
-                        $thisLevelIDs[] = $this->createTag();
+                        $thisLevelIDs[] = $this->createTag($parentId);
                     }
                 }
                 $tagIDs           = array_merge($tagIDs, $thisLevelIDs);
