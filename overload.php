@@ -19,6 +19,7 @@ use Joomla\CMS\Table\Content as ContentTable;
 use Joomla\CMS\Table\Table;
 use Joomla\CMS\Uri\Uri;
 use Joomla\CMS\User\User;
+use Joomla\String\StringHelper;
 
 // region Composer autoloader
 /** @var \Composer\Autoload\ClassLoader $autoloader */
@@ -98,6 +99,14 @@ class OverloadCLI extends OverloadApplicationCLI
 	 */
 	private $tagCreators;
 
+    /**
+     * User IDs that can create custom fields
+     *
+     * @var   array
+     * @since 2.0.0
+     */
+	private $fieldCreators;
+
 	/**
 	 * com_content's container
 	 *
@@ -135,7 +144,7 @@ class OverloadCLI extends OverloadApplicationCLI
 		$tagCount          = $this->input->getInt('tag-count', 10);
 
         // Custom fields
-        $customFieldCount          = $this->input->getInt('customfields-count', 10);
+        $customFieldCount   = $this->input->getInt('customfields-count', 10);
 
 		// Initialize CLI routing
 		$this->initCliRouting($siteURL);
@@ -161,6 +170,7 @@ class OverloadCLI extends OverloadApplicationCLI
 		// Joomla 4 still requires JPATH_COMPONENT :(
 		define('JPATH_COMPONENT', JPATH_ADMINISTRATOR . '/components/com_content');
 
+		// ##### Create Categories #####
 		if (empty($rootCategory))
 		{
 			if ($catCount == 0)
@@ -237,7 +247,7 @@ class OverloadCLI extends OverloadApplicationCLI
 
 		$this->out(sprintf('We have a total of %d categories to create articles in.', count($catIDs)));
 
-		// Create the tags
+		// ##### Create Tags #####
         if ($tagCount > 0) {
             $this->out('Creating Tags');
             $this->out('Deleting existing Tags');
@@ -257,9 +267,23 @@ class OverloadCLI extends OverloadApplicationCLI
                 $tagIDs           = array_merge($tagIDs, $thisLevelIDs);
                 $previousLevelIDs = $thisLevelIDs;
             }
+
+            $this->out(sprintf('We have a total of %d Tags to create articles in.', count($tagIDs)));
         }
 
-        $this->out(sprintf('We have a total of %d Tags to create articles in.', count($tagIDs)));
+        // ##### Create Custom Fields #####
+        if ($customFieldCount > 0) {
+            $this->out('Creating Custom Fields');
+            // Find out which users can create fields
+            $this->fieldCreators = $this->getFieldGroupCreators();
+            $this->out('Deleting existing Custom Fields');
+            $this->clearFields();
+            $fields = [];
+
+            for ($x = 0; $x < $customFieldCount; $x++) {
+                $fields[] = $this->createField();
+            }
+        }
 
         // Create articles, assign categories and tags to articles
 		foreach ($catIDs as $catId)
@@ -289,17 +313,35 @@ class OverloadCLI extends OverloadApplicationCLI
 			for ($j = 0; $j < $createArticleCount; $j++)
 			{
 				$articleId = $this->createArticle($catId);
-				if($articleId && !empty($tagIDs)) {
-				    $tagIdsTmp = [];
-				    // Assign 1-3 tags per article
-				    for($i = 0; $i < rand(1, 3); $i++) {
-                        $tagId = $tagIDs[array_rand($tagIDs)];
-                        // Do not assign the same id, more than once.
-                        if(in_array($tagId, $tagIdsTmp)) {
-                            continue;
+				if($articleId) { //assignFieldValue
+				    // Assign Tags to the articles
+                    if (!empty($tagIDs)) {
+                        $tagIdsTmp = [];
+                        // Assign 1-3 tags per article
+                        for ($i = 0; $i < rand(1, 3); $i++) {
+                            $tagId = $tagIDs[array_rand($tagIDs)];
+                            // Do not assign the same id, more than once.
+                            if (in_array($tagId, $tagIdsTmp)) {
+                                continue;
+                            }
+                            $tagIdsTmp[] = $tagId;
+                            $assignResult = $this->assignTag($articleId, $tagId);
+                            if($assignResult) {
+                                $this->out("Tag: $tagId assigned to article: $articleId");
+                            }
                         }
-                        $tagIdsTmp[] = $tagId;
-                        $this->assignTag($articleId, $tagId);
+                    }
+
+                    // Assign field values to the articles
+                    if(!empty($fields)) {
+                        // Assign 1-3 fields per article
+                        for ($i = 0; $i < rand(1, 3); $i++) {
+                            $field = $fields[array_rand($fields)];
+                            $assignResult = $this->assignFieldValue($field, $articleId);
+                            if($assignResult) {
+                                $this->out("Field: $field->id assigned to article: $articleId");
+                            }
+                        }
                     }
                 }
 			}
@@ -495,7 +537,7 @@ class OverloadCLI extends OverloadApplicationCLI
 	}
 
 	/**
-	 * Create a category and return its ID or NULL if creation failed
+	 * Create a Tag and return its ID or NULL if creation failed
 	 *
 	 * @param   int  $parent_id  Parent category ID
 	 *
@@ -596,6 +638,134 @@ class OverloadCLI extends OverloadApplicationCLI
 
 		return $id;
 	}
+
+    /**
+     * Assign field value to an article.
+     *
+     * @param \stdClass $field
+     * @param int $articleId
+     *
+     * @return bool
+     * @throws Exception
+     * @since 1.0.0
+     */
+	private function assignFieldValue($field, $articleId)
+    {
+        if(empty($field->fieldparams['options'])) {
+            return false;
+        }
+
+        $values = $field->fieldparams['options'];
+        $value = $values[array_rand($values)];
+        /** @var MVCFactoryInterface $factory */
+        $factory = $this->bootComponent('com_fields')->getMVCFactory();
+        /** @var \Joomla\Component\Fields\Administrator\Model\FieldModel $model */
+        $model = $factory->createModel('Field', 'Administrator');
+        $assignValue = is_array($value) && array_key_exists('value', $value) ? $value['value'] : (is_scalar($value) ? $value : '');
+        if($assignValue) {
+            $result = $model->setFieldValue($field->id, $articleId, $value);
+        }
+        else {
+            $result = false;
+        }
+        return $result;
+    }
+
+    /**
+     * Create a Field and return it or NULL if creation failed
+     *
+     * @return  \stdClass|null  Created category ID or NULL if creation failed
+     *
+     * @throws  Exception
+     * @since   2.0.0
+     */
+    private function createField(): ?\stdClass
+    {
+        $title = $this->faker->sentence(2);
+        $name = strtolower($title);
+        $alias = ApplicationHelper::stringURLSafe($title);
+        $uid   = $this->faker->randomElement($this->fieldCreators);
+
+        if (version_compare(JVERSION, '3.999.999', 'le'))
+        {
+            /** @var CategoriesModelCategory $model */
+            $model  = BaseDatabaseModel::getInstance('Field', 'FieldsModel');
+        }
+        else
+        {
+            /** @var MVCFactoryInterface $factory */
+            $factory = $this->bootComponent('com_fields')->getMVCFactory();
+            /** @var \Joomla\Component\Fields\Administrator\Model\FieldModel $model */
+            $model = $factory->createModel('Field', 'Administrator');
+        }
+
+        $table = $model->getTable();
+
+        while ($table->load(array('name' => $name)))
+        {
+            $title = StringHelper::increment($title);
+            $name = StringHelper::increment($name, 'dash');
+        }
+
+        $values = [];
+        $values['options'] = [];
+
+        // Create 20 default values
+        for($i =0; $i< 20; $i++) {
+            $value = $this->faker->sentence(2);
+            $values['options']['__field'.$i] = [
+                'name' => $value,
+                'value' => $value
+                ];
+        }
+
+        $data = [
+            'context' => 'com_content.article',
+            'group_id' => 0,
+            'title' => $title,
+            'name' => $name,
+            'label' => ucfirst($title),
+            'description'  => $this->faker->sentence(4),
+            'type' => 'checkboxes',
+            'fieldparams' => $values,
+            'params' => ['class' => '', 'label_class' => ''],
+            'state' => 1,
+            'language' => '*',
+            'access' => 1,
+            'created_user_id' => $uid
+        ];
+
+        // Save the category
+        $result = $model->save($data);
+
+        // If the save succeeded return the numeric category ID
+        if ($result !== false)
+        {
+            $data ['id'] = $model->getState($model->getName() . '.id');
+            return (object) $data;
+        }
+
+        // Let's try to load a category of the same alias
+        $db    = Factory::getDbo();
+        $query =
+            $db->getQuery(true)
+               ->select('id')
+               ->from($db->qn('#__fields'))
+               ->where($db->qn('name') . ' = ' . $db->q($name));
+        $db->setQuery($query);
+        $id = $db->loadResult() ?? 0;
+
+        // Nope. No dice. Return null.
+        if (!$id)
+        {
+            return null;
+        }
+
+        // Enable an existing category
+        $field = $model->getItem($id);
+
+        return $field;
+    }
 
     /**
      * Assign tag to an article
@@ -762,6 +932,36 @@ class OverloadCLI extends OverloadApplicationCLI
         $query->delete($db->quoteName('#__contentitem_tag_map'))->where('`tag_id` > 1');
         $db->setQuery($query);
         $db->execute();
+    }
+
+    /**
+     * Clear existing custom fields
+     *
+     * @since 1.0.0
+     */
+    protected function clearFields()
+    {
+        $db    = Factory::getDbo();
+        $query = $db->getQuery(true)
+                    ->select($db->qn('id'))
+                    ->from($db->qn('#__fields'))
+                    ->where($db->qn('context') . ' = ' . $db->q('com_content.article'));
+        $ids = $db->setQuery($query)->loadColumn() ?? [];
+
+        /** @var MVCFactoryInterface $factory */
+        $factory = $this->bootComponent('com_fields')->getMVCFactory();
+        /** @var \Joomla\Component\Fields\Administrator\Model\FieldModel $model */
+        $modelField = $factory->createModel('Field', 'Administrator');
+
+        if(!empty($ids)) {
+            foreach ($ids as $id) {
+                $fieldTable = $modelField->getTable();
+                $fieldTable->load($id);
+                $fieldTable->state = '-2';
+                $fieldTable->store();
+                }
+            $modelField->delete($ids);
+        }
     }
 
 	/**
